@@ -1,0 +1,1561 @@
+---
+title: "Play resilience relationship across challenges"
+author: "Sarah Ambruosi"
+date: "2026-11-10"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+    css: "style.css"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Packages
+
+```{r librairies}
+# data management
+library(tidyr)
+library(dplyr)
+library(tidyverse)
+library(car)
+
+# model fitting
+library(lme4) # linear models
+library(rptR) # repeatability assessment
+
+# visualisation
+library(ggplot2) # plots
+library(patchwork) # combine plots
+```
+
+# Repeatability assessment
+
+For the repeatability assessment of play, the different play types were analysed in the form of counts of success and failure events (i.e., duration of time performing the behaviour versus not performing the behaviour). Play type includes individual locomotor play, social locomotor play, play-fight, object play, and total play as the sum f all four play types.
+
+## Data
+
+```{r data_rpt_WUR}
+RPT_data_WUR <- read.csv("/data/WUR_behaviour_four_days.csv", sep=";")
+RPT_data_WUR[,c(1:5)] <- lapply(RPT_data_WUR[,c(1:5)],as.factor)
+RPT_data_WUR$Batch_Pen <- interaction(RPT_data_WUR$Batch, RPT_data_WUR$Pen) # variable to test pen repeatability
+
+# Add total play
+RPT_data_WUR$d_total_play <- RPT_data_WUR$d_locomotor_individual+RPT_data_WUR$d_locomotor_social+RPT_data_WUR$d_object_play+RPT_data_WUR$d_play_fight
+RPT_data_WUR$fail_d_total_play <- 14400 - RPT_data_WUR$d_total_play 
+
+data <- RPT_data_WUR
+summary(data)
+
+behaviours <- c("d_locomotor_individual", "d_locomotor_social", "d_object_play", "d_play_fight", "d_total_play")
+```
+
+**Metadata**:\
+- *Pig_ID*: individual identification number of a pig.\
+- *Batch*: batches included in this dataset ["3", "4", "5", "6"].\
+- *Pen*: identification number for each pen ["2", "3", "8", "9"].\
+- *Batch_Pen*: Interaction between batch and pen to assess pen-mevel repeatability.\
+- *LPS_Frus*: Challenge to which the pig was submitted, either a lipopolysaccharide injection ["LPS"] or a social frustration challenge ["Frus"].\
+- *Day*: the day of the observation either two days before the challenge ["1"] or the day before the challenge ["2"].
+
+**Variables**:\
+- *d_locomotor_individual, d_locomotor_social, d_play_fight, d_object_play, d_total_play*: duration performing the play type [0-14400s].\
+- *fail_d_locomotor_individual fail_d_locomotor_social fail_d_play_fight fail_d_object_play, fail_d_total_play*: duration not performing the play type (total observation duration [14400s] minus duration of play type).
+
+## Play histograms
+
+```{r graphs_LPS_Frus}
+play_by_pig <- RPT_data_WUR %>%
+    group_by(Pig_ID, LPS_Frus, Day) %>%
+    summarise(
+        played = any(d_total_play > 0, na.rm = TRUE),
+        .groups = "drop"
+    )
+
+# Proportions de porcs ayant joué ou non
+summary_play <- play_by_pig %>%
+    group_by(LPS_Frus, Day) %>%
+    summarise(
+        n_pigs = n(),
+        n_played = sum(played),
+        n_never_played = sum(!played),
+        prop_played = n_played / n_pigs,
+        prop_never_played = n_never_played / n_pigs,
+        .groups = "drop"
+    )
+
+summary_play
+
+data <- RPT_data_WUR %>%
+  pivot_longer(
+    cols = c(d_object_play, d_locomotor_individual, d_locomotor_social, d_play_fight),
+    names_to = "Variable",
+    values_to = "Duration"
+  )
+
+data <- data %>%
+  group_by(LPS_Frus, Day, Variable) %>%
+  summarise(
+    mean = mean(Duration/14400, na.rm = TRUE),
+    SEM = sd(Duration/14400, na.rm = TRUE) /
+          sqrt(sum(!is.na(Duration/14400))),
+    .groups = "drop"
+  )
+
+LPS_Frus_play <- ggplot(data,
+             aes(x = Variable, y = mean, fill = Variable)) +
+  geom_col(width = 0.7) +
+  geom_errorbar(
+    aes(ymin = mean - SEM,
+        ymax = mean + SEM),
+    width = 0.2,
+    linewidth = 0.5
+  ) +
+  facet_grid(Day ~ LPS_Frus) +
+  scale_fill_manual(values = c("pink", "violet", "orange", "red")) +
+  labs(
+    title = "LPS and Frustration challenges",
+    x = "Play behaviour",
+    y = "Proportion of time",
+    fill = "Variable"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  )
+
+LPS_Frus_play
+```
+
+## Intra-LPS repeatability
+
+### Individual repeatability
+
+Pig repeatability between day 1 and day 2 before LPS.
+
+```{r rpt_LPS_pig,  results="hide"}
+data_LPS <- subset(RPT_data_WUR, LPS_Frus %in% "LPS")
+
+rpt_LPS_prop <- lapply(behaviours, function(var) {
+  
+  formula <- as.formula(paste("cbind(", var, ",fail_", var, ") ~ (1 | Pig_ID)", sep = ""))
+  
+  rptProportion(formula, grname = c("Pig_ID"), data = data_LPS, nboot = 1000, npermut = 0)
+
+})
+```
+
+```{r rpt_LPS_pig_result}
+names(rpt_LPS_prop) <- c("individual locomotor play", "social locomotor play", "object play", "play-fight", "total play")
+
+lapply(names(rpt_LPS_prop), function(var) {
+  cat("Individual repeatability intra-LPS for", var, "\n")
+  print(rpt_LPS_prop[[var]])
+})
+```
+
+### Pen repeatability
+
+Pen repeatability (i.e., a group of pig) between day 1 and day 2 before LPS.
+
+```{r rpt_LPS_pen,  results="hide"}
+rpt_LPS_prop <- lapply(behaviours, function(var) {
+  
+  formula <- as.formula(paste("cbind(", var, ",fail_", var, ") ~ (1 | Batch_Pen)", sep = ""))
+  
+  rptProportion(formula, grname = c("Batch_Pen"), data = data_LPS, nboot = 1000, npermut = 0)
+
+})
+```
+
+```{r rpt_LPS_pen_result}
+names(rpt_LPS_prop) <- c("individual locomotor play", "social locomotor play", "object play", "play-fight", "total play")
+
+lapply(names(rpt_LPS_prop), function(var) {
+  cat("Pen-level repeatability intra-LPS for", var, "\n")
+  print(rpt_LPS_prop[[var]])
+})
+```
+
+## Intra-frustration repeatability
+
+### Individual repeatability
+
+```{r rpt_Frus_pig,  results="hide"}
+data_Frus <- subset(RPT_data_WUR, LPS_Frus %in% "Frus")
+
+
+rpt_Frus_prop <- lapply(behaviours, function(var) {
+  
+  formula <- as.formula(paste("cbind(", var, ",fail_", var, ") ~ (1 | Pig_ID)", sep = ""))
+  
+  rptProportion(formula, grname = c("Pig_ID"), data = data_Frus, nboot = 1000, npermut = 0)
+
+})
+```
+
+```{r rpt_Frus_pig_result}
+names(rpt_Frus_prop) <- c("individual locomotor play", "social locomotor play", "object play", "play-fight", "total play")
+
+lapply(names(rpt_Frus_prop), function(var) {
+  cat("Individual repeatability intra-Frustration for", var, "\n")
+  print(rpt_Frus_prop[[var]])
+})
+```
+
+### Pen repeatability
+
+```{r rpt_Frus_pen,  results="hide"}
+rpt_Frus_prop <- lapply(behaviours, function(var) {
+  
+  formula <- as.formula(paste("cbind(", var, ",fail_", var, ") ~ (1 | Batch_Pen)", sep = ""))
+  
+  rptProportion(formula, grname = c("Batch_Pen"), data = data_Frus, nboot = 1000, npermut = 0)
+
+})
+```
+
+```{r rpt_Frus_pen_result}
+names(rpt_Frus_prop) <- c("individual locomotor play", "social locomotor play", "object play", "play-fight", "total play")
+
+lapply(names(rpt_Frus_prop), function(var) {
+  cat("Pen-level repeatability intra-Frustration for", var, "\n")
+  print(rpt_Frus_prop[[var]])
+})
+```
+
+## Global repeatability (challenge × day)
+
+### Individual repeatability
+
+Repeatability adjusted for challenge, day, and their interaction.
+
+```{r rpt_adjusted_pig,  results="hide"}
+data <- RPT_data_WUR
+
+rpt_Global_prop <- lapply(behaviours, function(var) {
+  
+  formula <- as.formula(paste("cbind(", var, ",fail_", var, ") ~ LPS_Frus*Day + (1 | Pig_ID)", sep = ""))
+  
+  rptProportion(formula, grname = c("Pig_ID"), data = data, nboot = 1000, npermut = 0)
+
+})
+```
+
+```{r rpt_adjusted_pig_result}
+names(rpt_Global_prop) <- c("individual locomotor play", "social locomotor play", "object play", "play-fight", "total play")
+
+lapply(names(rpt_Global_prop), function(var) {
+  cat("Individual repeatability across day & challenge for", var, "\n")
+  print(rpt_Global_prop[[var]])
+})
+```
+
+### Pen repeatability
+
+```{r rpt_adjusted_pen,  results="hide"}
+rpt_Global_prop <- lapply(behaviours, function(var) {
+  
+  formula <- as.formula(paste("cbind(", var, ",fail_", var, ") ~ LPS_Frus*Day + (1 | Batch_Pen)", sep = ""))
+  
+  rptProportion(formula, grname = c("Batch_Pen"), data = data, nboot = 1000, npermut = 0)
+
+})
+```
+
+```{r rpt_adjusted_pen_result}
+names(rpt_Global_prop) <- c("individual locomotor play", "social locomotor play", "object play", "play-fight", "total play")
+
+lapply(names(rpt_Global_prop), function(var) {
+  cat("Pen-level repeatability across day & challenge for", var, "\n")
+  print(rpt_Global_prop[[var]])
+})
+```
+
+# Correlation analyses
+
+## WUR
+
+### LPS challenge
+
+#### Variable selection
+
+```{r variables_LPS}
+WUR_LPS <- read.csv("/data/WUR_LPS.csv", sep=";")
+
+data <- WUR_LPS
+data <- data %>%
+  mutate(
+    Pig_ID = as.factor(Pig_ID),
+    Batch = as.factor(Batch),
+    Pen = as.factor(Pen)
+  )
+
+# Define variables
+behavior_vars <- c("p_total_play",	"p_object_play",	"p_locomotor_individual",	"p_locomotor_social",	"p_play_fight")
+physio_vars <- c("Cortisol_Baseline", "Glucose_Baseline", "Lactate_Baseline", "Temperature_Baseline", "dROM_Baseline",   "Cortisol_Amplitude", "Glucose_Amplitude", "Lactate_Amplitude", "Temperature_Amplitude", "dROM_Amplitude", "ADG_38_45", "ADG_45_52")
+```
+
+**Metadata**:\
+- *Pig_ID*: individual identification number of a pig.\
+- *Batch*: batches included in this dataset ["3", "4", "5", "6"].\
+- *Pen*: identification number for each pen ["2", "3", "8", "9"].
+
+**Variables**:\
+- *p_indplay, p_socplay, p_playfight, p_objplay, p_totalplay*: proportion of time performing the play type\
+- *Cortisol*: plasma cortisol\
+- *Glucose*: plasma glucose\
+- *Lactate*: plasma D-lactate\
+- *Temperature*: rectal temperature\
+- *dROM*: derivatives of reactive oxygen metabolites\
+- *ADG_38_45*: Average daily gain calculated between 38 and 45 days of age (before the LPS challenge)\
+- *ADG_45_52*: Average daily gain calculated between 45 and 52 days of age (after the LPS challenge)\
+- **Baseline** variables were measured just before the LPS challenge\
+- **Amplitude** variables were calculated over the measurements at 1 hour, 3 hours and 5 hours after the challenge.
+
+#### Extract residuals
+
+```{r model_residuals_LPS}
+residuals_dataset <- data.frame(Pig_ID = data$Pig_ID)
+
+for (var in c(behavior_vars, physio_vars)) {
+  #arcsine transformation for proportions of play, raw data for physiology
+  x <- if (var %in% behavior_vars) asin(sqrt(data[[var]])) else data[[var]] 
+  residuals_dataset[[var]] <- residuals(
+    lmer(x ~ 1 + (1 | Batch), data = data, na.action = na.exclude)
+  )
+}
+```
+
+#### Correlations play-physio
+
+```{r Spearman_LPS}
+results_df_LPS <- bind_rows(lapply(behavior_vars, function(b) {
+  lapply(physio_vars, function(p) {
+    
+    test <- cor.test(
+      residuals_dataset[[b]],
+      residuals_dataset[[p]],
+      method = "spearman",
+      exact = FALSE
+    )
+    
+    data.frame(
+      behavior = b,
+      physiology = p,
+      correlation = unname(test$estimate),
+      p_value = test$p.value
+    )
+    
+  }) |> bind_rows()
+})) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+heatmap_df <- results_df_LPS %>%
+  mutate(
+    sig = p_value < 0.05,
+    physiology = factor(
+      physiology,
+      levels = c(
+        unique(physiology[grepl("Amplitude", physiology)]),
+        unique(physiology[grepl("Baseline", physiology)]),
+        unique(physiology[grepl("ADG", physiology)])
+      )
+    )
+  )
+
+heatmap_LPS <- ggplot(heatmap_df, aes(y = physiology, x = behavior, fill = correlation)) +
+  geom_tile() +
+  geom_text(
+    aes(label = round(correlation, 2),
+        fontface = ifelse(sig, "bold", "plain"))
+    ) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal() +
+  labs(
+        title = "LPS challenge",
+    x = "Play behaviour",
+    y = "Physiological variable",
+    fill = "Spearman r"
+  )  +
+theme(
+  axis.text.x = element_text(size = 12, angle = 90, hjust = 1),
+  axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 14, hjust = 0.5)
+)
+
+heatmap_LPS
+
+ggsave(
+  "/plots/heatmap_LPS.png",
+  width = 8,
+  height = 7,
+  dpi = 500
+)
+```
+
+#### Visualisation
+
+```{r visualisation_LPS}
+# Filter significant results
+sig_LPS <- results_df_LPS %>%
+  filter(p_value < 0.05)
+
+#Function for scatter plot
+plot_corr <- function(data, xvar, yvar, r = NA, p = NA) {
+  
+  ggplot(data, aes(x = .data[[xvar]], y = .data[[yvar]])) +
+    geom_point(alpha = 0.6) +
+    geom_smooth(method = "lm", se = TRUE, color = "black") +
+    theme_minimal() +
+    labs(
+      title = paste(xvar, "vs", yvar),
+      subtitle = paste0(
+        "method = ", sig_LPS$method[i],
+        " | r = ", signif(r, 3),
+        " | p = ", signif(p, 3)
+        )
+      )
+}
+
+plots_LPS <- list()
+
+for(i in 1:nrow(sig_LPS)) {
+  
+  x <- sig_LPS$behavior[i]
+  y <- sig_LPS$physiology[i]
+  
+  plots_LPS[[i]] <- plot_corr(
+    residuals_dataset,
+    xvar = x,
+    yvar = y,
+    r = sig_LPS$correlation[i],
+    p = sig_LPS$p_value[i]
+  )
+}
+
+for(p in plots_LPS) {
+  print(p)
+}
+```
+
+#### Correlation within play
+
+```{r Spearman_LPS_play}
+results_df_LPS_play <- bind_rows(lapply(behavior_vars, function(b) {
+  lapply(behavior_vars, function(p) {
+    
+    test <- cor.test(
+      residuals_dataset[[b]],
+      residuals_dataset[[p]],
+      method = "spearman",
+      exact = FALSE
+    )
+    
+    data.frame(
+      behavior1 = b,
+      behavior2 = p,
+      correlation = unname(test$estimate),
+      p_value = test$p.value
+    )
+    
+  })}) |> bind_rows()
+) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+heatmap_df <- results_df_LPS_play %>%
+  mutate(
+    sig = p_value < 0.05
+    )
+
+heatmap_LPS_play <- ggplot(heatmap_df, aes(y = behavior1, x = behavior2, fill = correlation)) +
+  geom_tile() +
+  geom_text(
+    aes(label = round(correlation, 2),
+        fontface = ifelse(sig, "bold", "plain"))
+    ) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal() +
+  labs(
+        title = "LPS challenge",
+    x = "Play behaviour",
+    y = "Play behaviour",
+    fill = "Spearman r"
+  )  +
+theme(
+  axis.text.x = element_text(size = 12, angle = 90, hjust = 1),
+  axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 14, hjust = 0.5)
+)
+
+heatmap_LPS_play
+
+ggsave(
+  "/plots/heatmap_LPS_play.png",
+  width = 8,
+  height = 7,
+  dpi = 500
+)
+```
+
+#### Correlation within physio
+
+```{r Spearman_LPS_physio}
+results_df_LPS_physio <- bind_rows(lapply(physio_vars, function(b) {
+  lapply(physio_vars, function(p) {
+    
+    test <- cor.test(
+      residuals_dataset[[b]],
+      residuals_dataset[[p]],
+      method = "spearman",
+      exact = FALSE
+    )
+    
+    data.frame(
+      physio1 = b,
+      physio2 = p,
+      correlation = unname(test$estimate),
+      p_value = test$p.value
+    )
+    
+  })}) |> bind_rows()
+) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+heatmap_df <- results_df_LPS_physio %>%
+  mutate(
+    sig = p_value < 0.05
+    )
+
+heatmap_LPS_physio <- ggplot(heatmap_df, aes(y = physio1, x = physio2, fill = correlation)) +
+  geom_tile() +
+  geom_text(
+    aes(label = round(correlation, 2),
+        fontface = ifelse(sig, "bold", "plain"))
+    ) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal() +
+  labs(
+        title = "LPS challenge",
+    x = "Physiology",
+    y = "Physiology",
+    fill = "Spearman r"
+  )  +
+theme(
+  axis.text.x = element_text(size = 12, angle = 90, hjust = 1),
+  axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 14, hjust = 0.5)
+)
+
+heatmap_LPS_physio
+
+ggsave(
+  "/plots/heatmap_LPS_physio.png",
+  width = 8,
+  height = 7,
+  dpi = 500
+)
+```
+
+### Frustration challenge
+
+#### Variable selection
+
+```{r variables_Frus}
+WUR_Frus <- read.csv("/data/WUR_Frustration.csv", sep=";")
+
+data <- WUR_Frus
+data <- data %>%
+  mutate(
+    Pig_ID = as.factor(Pig_ID),
+    Batch = as.factor(Batch),
+    Pen = as.factor(Pen)
+  )
+
+# Define variables
+behavior_vars <- c("p_total_play",	"p_object_play",	"p_locomotor_individual",	"p_locomotor_social",	"p_play_fight")
+physio_vars <- c("Cortisol_Baseline", "Glucose_Baseline", "Lactate_Baseline", "dROM_Baseline",   "Cortisol_Amplitude", "Glucose_Amplitude", "Lactate_Amplitude", "dROM_Amplitude", "ADG_45_52")
+```
+
+**Metadata**:\
+- *Pig_ID*: individual identification number of a pig.\
+- *Batch*: batches included in this dataset ["3", "4", "5", "6"].\
+- *Pen*: identification number for each pen ["2", "3", "8", "9"].
+
+**Variables**:\
+- *p_indplay, p_socplay, p_playfight, p_objplay, p_totalplay*: proportion of time performing the play type\
+- *Cortisol*: plasma cortisol\
+- *Glucose*: plasma glucose\
+- *Lactate*: plasma D-lactate\
+- *dROM*: derivatives of reactive oxygen metabolites\
+- *ADG_45_52*: Average daily gain calculated between 45 and 52 days of age (before the Frustration challenge)\
+- **Baseline** variables were measured just before the *LPS* challenge\
+- **Amplitude** variables were calculated over the measurements at 1 hour post-challenge.
+
+#### Extract residuals
+
+```{r model_residuals_Frus}
+residuals_dataset <- data.frame(Pig_ID = data$Pig_ID)
+
+for (var in c(behavior_vars, physio_vars)) {
+  #arcsine transformation for proportions of play, raw data for physiology
+  x <- if (var %in% behavior_vars) asin(sqrt(data[[var]])) else data[[var]] 
+  residuals_dataset[[var]] <- residuals(
+    lmer(x ~ 1 + (1 | Batch), data = data, na.action = na.exclude)
+  )
+}
+```
+
+#### Correlations play-physio
+
+```{r Spearman_Frus}
+results_df_Frus <- bind_rows(lapply(behavior_vars, function(b) {
+  lapply(physio_vars, function(p) {
+    
+    test <- cor.test(
+      residuals_dataset[[b]],
+      residuals_dataset[[p]],
+      method = "spearman",
+      exact = FALSE
+    )
+    
+    data.frame(
+      behavior = b,
+      physiology = p,
+      correlation = unname(test$estimate),
+      p_value = test$p.value
+    )
+    
+  }) |> bind_rows()
+})) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+heatmap_df <- results_df_Frus %>%
+  mutate(
+    sig = p_value < 0.05,
+    physiology = factor(
+      physiology,
+      levels = c(
+        unique(physiology[grepl("Amplitude", physiology)]),
+        unique(physiology[grepl("Baseline", physiology)]),
+        unique(physiology[grepl("ADG", physiology)])
+      )
+    )
+  )
+
+heatmap_Frus <- ggplot(heatmap_df, aes(y = physiology, x = behavior, fill = correlation)) +
+  geom_tile() +
+  geom_text(
+    aes(label = round(correlation, 2),
+        fontface = ifelse(sig, "bold", "plain"))
+    ) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Frustration challenge",
+    x = "Play behaviour",
+    y = "Physiological variable",
+    fill = "Spearman r"
+  )  +
+theme(
+  axis.text.x = element_text(size = 12, angle = 90, hjust = 1),
+  axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 14, hjust = 0.5)
+)
+
+heatmap_Frus
+
+ggsave(
+  "/plots/heatmap_Frus.png",
+  width = 8,
+  height = 7,
+  dpi = 500
+)
+```
+
+#### Visualisation
+
+```{r visualisation_Frus}
+# Filter significant results
+sig_Frus <- results_df_Frus %>%
+  filter(p_value < 0.05)
+
+#Function for scatter plot
+plot_corr <- function(data, xvar, yvar, r = NA, p = NA) {
+  
+  ggplot(data, aes(x = .data[[xvar]], y = .data[[yvar]])) +
+    geom_point(alpha = 0.6) +
+    geom_smooth(method = "lm", se = TRUE, color = "black") +
+    theme_minimal() +
+    labs(
+      title = paste(xvar, "vs", yvar),
+      subtitle = paste0(
+        "method = ", sig_Frus$method[i],
+        " | r = ", signif(r, 3),
+        " | p = ", signif(p, 3)
+        )
+      )
+}
+
+plots_Frus <- list()
+
+for(i in 1:nrow(sig_Frus)) {
+  
+  x <- sig_Frus$behavior[i]
+  y <- sig_Frus$physiology[i]
+  
+  plots_Frus[[i]] <- plot_corr(
+    residuals_dataset,
+    xvar = x,
+    yvar = y,
+    r = sig_Frus$correlation[i],
+    p = sig_Frus$p_value[i]
+  )
+}
+
+for(p in plots_Frus) {
+  print(p)
+}
+```
+
+#### Correlation within play
+
+```{r Spearman_Frus_play}
+results_df_Frus_play <- bind_rows(lapply(behavior_vars, function(b) {
+  lapply(behavior_vars, function(p) {
+    
+    test <- cor.test(
+      residuals_dataset[[b]],
+      residuals_dataset[[p]],
+      method = "spearman",
+      exact = FALSE
+    )
+    
+    data.frame(
+      behavior1 = b,
+      behavior2 = p,
+      correlation = unname(test$estimate),
+      p_value = test$p.value
+    )
+    
+  })}) |> bind_rows()
+) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+heatmap_df <- results_df_Frus_play %>%
+  mutate(
+    sig = p_value < 0.05
+    )
+
+heatmap_Frus_play <- ggplot(heatmap_df, aes(y = behavior1, x = behavior2, fill = correlation)) +
+  geom_tile() +
+  geom_text(
+    aes(label = round(correlation, 2),
+        fontface = ifelse(sig, "bold", "plain"))
+    ) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal() +
+  labs(
+        title = "Frustration challenge",
+    x = "Play behaviour",
+    y = "Play behaviour",
+    fill = "Spearman r"
+  )  +
+theme(
+  axis.text.x = element_text(size = 12, angle = 90, hjust = 1),
+  axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 14, hjust = 0.5)
+)
+
+ggsave(
+  "/plots/heatmap_Frus_play.png",
+  width = 8,
+  height = 7,
+  dpi = 500
+)
+```
+
+#### Correlation within physio
+
+```{r Spearman_Frus_physio}
+results_df_Frus_physio <- bind_rows(lapply(physio_vars, function(b) {
+  lapply(physio_vars, function(p) {
+    
+    test <- cor.test(
+      residuals_dataset[[b]],
+      residuals_dataset[[p]],
+      method = "spearman",
+      exact = FALSE
+    )
+    
+    data.frame(
+      physio1 = b,
+      physio2 = p,
+      correlation = unname(test$estimate),
+      p_value = test$p.value
+    )
+    
+  })}) |> bind_rows()
+) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+heatmap_df <- results_df_Frus_physio %>%
+  mutate(
+    sig = p_value < 0.05
+    )
+
+heatmap_Frus_physio <- ggplot(heatmap_df, aes(y = physio1, x = physio2, fill = correlation)) +
+  geom_tile() +
+  geom_text(
+    aes(label = round(correlation, 2),
+        fontface = ifelse(sig, "bold", "plain"))
+    ) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal() +
+  labs(
+        title = "Frustration challenge",
+    x = "Physiology",
+    y = "Physiology",
+    fill = "Spearman r"
+  )  +
+theme(
+  axis.text.x = element_text(size = 12, angle = 90, hjust = 1),
+  axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 14, hjust = 0.5)
+)
+
+heatmap_Frus_physio
+
+ggsave(
+  "/plots/heatmap_Frus_physio.png",
+  width = 8,
+  height = 7,
+  dpi = 500
+)
+```
+
+## ANSES
+
+### Play histograms
+
+```{r graphs_ETEC}
+ANSES <- read.csv("/data/ANSES.csv", sep=";") 
+
+# Define variables
+behavior_vars <- c("p_total_play",	"p_enrichment",	"p_locomotor_individual",	"p_locomotor_social",	"p_play_fight")
+physio_vars <- c("cortisol_Baseline", "Glucose_Baseline", "Lactate_Baseline", "Temperature_Baseline", "DROM_Baseline", "FRAP_Baseline", "NEFA_Baseline",  "Granulo_lymphocyte_ratio_Baseline",	"Haptoglobin_Baseline",	"NB_monocyte_Baseline","cortisol_Amplitude", "Glucose_Amplitude", "Lactate_Amplitude", "Temperature_Amplitude", "DROM_Amplitude", "FRAP_Amplitude", "NEFA_Amplitude",  "Granulo_lymphocyte_ratio_Amplitude",	"Haptoglobin_Amplitude",	"NB_monocyte_Amplitude","ADG_baseline", "ADG_D0_D9")	
+
+play_by_pig <- ANSES %>%
+    group_by(Pig_ID, Inoculation, Housing) %>%
+    summarise(
+        played = any(p_total_play-p_enrichment > 0, na.rm = TRUE),
+        .groups = "drop"
+    )
+
+# Proportions de porcs ayant joué ou non
+summary_play <- play_by_pig %>%
+    group_by(Inoculation, Housing) %>%
+    summarise(
+        n_pigs = n(),
+        n_played = sum(played),
+        n_never_played = sum(!played),
+        prop_played = n_played / n_pigs,
+        prop_never_played = n_never_played / n_pigs,
+        .groups = "drop"
+    )
+
+summary_play
+
+data <- ANSES %>%
+  pivot_longer(
+    cols = c(p_enrichment, p_locomotor_individual, p_locomotor_social, p_play_fight),
+    names_to = "Variable",
+    values_to = "Proportion"
+  )
+
+data <- data %>%
+  group_by(Housing, Inoculation, Variable) %>%
+  summarise(
+    mean = mean(Proportion, na.rm = TRUE),
+    SEM = sd(Proportion, na.rm = TRUE) /
+          sqrt(sum(!is.na(Proportion))),
+    .groups = "drop"
+  )
+
+ETEC_play <- ggplot(data,
+             aes(x = Variable, y = mean, fill = Variable)) +
+  geom_col(width = 0.7) +
+  geom_errorbar(
+    aes(ymin = mean - SEM,
+        ymax = mean + SEM),
+    width = 0.2,
+    linewidth = 0.5
+  ) +
+  facet_grid(Housing ~ Inoculation) +
+  scale_fill_manual(values = c("orange", "pink", "violet", "red")) +
+  labs(
+    title = "ETEC challenge",
+    x = "Play behaviour",
+    y = "Proportion of time",
+    fill = "Variable"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  )
+
+ETEC_play
+```
+
+### ETEC challenge
+
+#### Variable selection
+
+```{r variables_inoc}
+data <- ANSES[which(ANSES$Inoculation == "inoc"),]
+data <- data %>%
+  mutate(
+    Pig_ID = as.factor(Pig_ID),
+    Sex = as.factor(Sex), 
+    Batch = as.factor(Batch), 
+    Housing = as.factor(Housing), 
+    Inoculation = as.factor(Inoculation), 
+    Pen_ID  = as.factor(Pen_ID)
+  )
+```
+
+**Metadata**:\
+- *Pig_ID*: individual identification number of a pig.\
+- *Batch*: batches included in this dataset ["1", "3"].\
+- *Pen_ID*: identification number for each pen ["B1", "B2", "E3", "E4"].\
+- *Sex*: sex of the pig as male ["M"] or female ["F"].\
+- *Housing*: housing condition of the pig either enriched ["ENR"] or barren ["MIN"].\
+- *Inoculation*: inoculation status of the pig either control inoculated with sterile broth ["control"] or ETEC ["inoc"].
+
+**Variables**:\
+- *p_totalplay, p_locomotor_play_solitary, p_locomotor_play_group, p_play_fight, p_enrichment*: proportion of time performing the play type\
+- *Cortisol*: plasma cortisol\
+- *Glucose*: plasma glucose\
+- *Lactate*: plasma D-lactate\
+- *Temperature*: rectal temperature\
+- *dROM*: plasma derivatives of reactive oxygen metabolites\
+- *FRAP*: ferric reducing ability of plasma\
+- *NEFA*: plamsa non-esterified fatty acids\
+- *Granulo_lymphocyte_ratio*: plasma granulocytes to lymphocytes ratio\
+- *NB_monocyte*: plasma monocytes\
+- *Haptoglobin*: plasma haptoglobin\
+- **Baseline** variables were measured three days before inoculation\
+- **Amplitude** variables were calculated over the measurements between D1 and D3 post-challenge\
+- *ADG_baseline*: Average daily gain calculated between between the day before weaning and day 11 post-weaning (inoculation)\
+- *ADG_D0_D9*: Average daily gain calculated between D0 (inoculation) and D9 post-inoculation.
+
+#### Extract residuals
+
+```{r model_residuals_inoc}
+residuals_dataset <- data.frame(Pig_ID = data$Pig_ID)
+
+for (var in c(behavior_vars, physio_vars)) {
+  #arcsine transformation for proportions of play, raw data for physiology
+  x <- if (var %in% behavior_vars) asin(sqrt(data[[var]])) else data[[var]] 
+  residuals_dataset[[var]] <- residuals(
+    lmer(x ~ Sex + Housing + (1 | Batch), data = data, na.action = na.exclude)
+  )
+}
+```
+
+#### Correlations play-physio
+
+```{r Spearman_inoc}
+results_df_inoc <- bind_rows(lapply(behavior_vars, function(b) {
+  lapply(physio_vars, function(p) {
+    
+    test <- cor.test(
+      residuals_dataset[[b]],
+      residuals_dataset[[p]],
+      method = "spearman",
+      exact = FALSE
+    )
+    
+    data.frame(
+      behavior = b,
+      physiology = p,
+      correlation = unname(test$estimate),
+      p_value = test$p.value
+    )
+    
+  }) |> bind_rows()
+})) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+heatmap_df <- results_df_inoc %>%
+  mutate(
+    sig = p_value < 0.05,
+    physiology = factor(
+      physiology,
+      levels = c(
+        unique(physiology[grepl("Amplitude", physiology)]),
+        unique(physiology[grepl("Baseline", physiology)]),
+        unique(physiology[grepl("ADG", physiology)])
+      )
+    )
+  )
+
+heatmap_ETEC <- ggplot(heatmap_df, aes(y = physiology, x = behavior, fill = correlation)) +
+  geom_tile() +
+  geom_text(
+    aes(label = round(correlation, 2),
+        fontface = ifelse(sig, "bold", "plain"))
+    ) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal() +
+  labs(
+            title = "ETEC challenge",
+    x = "Play behaviour",
+    y = "Physiological variable",
+    fill = "Spearman r"
+  )  +
+theme(
+  axis.text.x = element_text(size = 12, angle = 90, hjust = 1),
+  axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 14, hjust = 0.5)
+)
+
+heatmap_ETEC
+
+ggsave(
+  "/plots/heatmap_ETEC.png",
+  width = 8,
+  height = 7,
+  dpi = 500
+)
+```
+
+#### Visualisation
+
+```{r visualisation_inoc}
+# Filter significant results
+sig_inoc <- results_df_inoc %>%
+  filter(p_value < 0.05)
+
+#Function for scatter plot
+plot_corr <- function(data, xvar, yvar, r = NA, p = NA) {
+  
+  ggplot(data, aes(x = .data[[xvar]], y = .data[[yvar]])) +
+    geom_point(alpha = 0.6) +
+    geom_smooth(method = "lm", se = TRUE, color = "black") +
+    theme_minimal() +
+    labs(
+      title = paste(xvar, "vs", yvar),
+      subtitle = paste0(
+        "method = ", sig_inoc$method[i],
+        " | r = ", signif(r, 3),
+        " | p = ", signif(p, 3)
+        )
+      )
+}
+
+plots_inoc <- list()
+
+for(i in 1:nrow(sig_inoc)) {
+  
+  x <- sig_inoc$behavior[i]
+  y <- sig_inoc$physiology[i]
+  
+  plots_inoc[[i]] <- plot_corr(
+    residuals_dataset,
+    xvar = x,
+    yvar = y,
+    r = sig_inoc$correlation[i],
+    p = sig_inoc$p_value[i]
+  )
+}
+
+for(p in plots_inoc) {
+  print(p)
+}
+```
+
+#### Correlation within play
+
+```{r Spearman_inoc_play}
+results_df_inoc_play <- bind_rows(lapply(behavior_vars, function(b) {
+  lapply(behavior_vars, function(p) {
+    
+    test <- cor.test(
+      residuals_dataset[[b]],
+      residuals_dataset[[p]],
+      method = "spearman",
+      exact = FALSE
+    )
+    
+    data.frame(
+      behavior1 = b,
+      behavior2 = p,
+      correlation = unname(test$estimate),
+      p_value = test$p.value
+    )
+    
+  })}) |> bind_rows()
+) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+heatmap_df <- results_df_inoc_play %>%
+  mutate(
+    sig = p_value < 0.05
+    )
+
+heatmap_ETEC_play <- ggplot(heatmap_df, aes(y = behavior1, x = behavior2, fill = correlation)) +
+  geom_tile() +
+  geom_text(
+    aes(label = round(correlation, 2),
+        fontface = ifelse(sig, "bold", "plain"))
+    ) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal() +
+  labs(
+        title = "ETEC challenge",
+    x = "Play behaviour",
+    y = "Play behaviour",
+    fill = "Spearman r"
+  )  +
+theme(
+  axis.text.x = element_text(size = 12, angle = 90, hjust = 1),
+  axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 14, hjust = 0.5)
+)
+
+heatmap_ETEC_play
+
+ggsave(
+  "/plots/heatmap_ETEC_play.png",
+  width = 8,
+  height = 7,
+  dpi = 500
+)
+```
+
+#### Correlation within physio
+
+```{r Spearman_inoc_physio}
+results_df_inoc_physio <- bind_rows(lapply(physio_vars, function(b) {
+  lapply(physio_vars, function(p) {
+    
+    test <- cor.test(
+      residuals_dataset[[b]],
+      residuals_dataset[[p]],
+      method = "spearman",
+      exact = FALSE
+    )
+    
+    data.frame(
+      physio1 = b,
+      physio2 = p,
+      correlation = unname(test$estimate),
+      p_value = test$p.value
+    )
+    
+  })}) |> bind_rows()
+) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+heatmap_df <- results_df_inoc_physio %>%
+  mutate(
+    sig = p_value < 0.05
+    )
+
+heatmap_ETEC_physio <- ggplot(heatmap_df, aes(y = physio1, x = physio2, fill = correlation)) +
+  geom_tile() +
+  geom_text(
+    aes(label = round(correlation, 2),
+        fontface = ifelse(sig, "bold", "plain"))
+    ) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal() +
+  labs(
+        title = "ETEC challenge",
+    x = "Physiology",
+    y = "Physiology",
+    fill = "Spearman r"
+  )  +
+theme(
+  axis.text.x = element_text(size = 12, angle = 90, hjust = 1),
+  axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 14, hjust = 0.5)
+)
+
+heatmap_ETEC_physio
+
+ggsave(
+  "/plots/heatmap_ETEC_physio.png",
+  width = 16,
+  height = 14,
+  dpi = 500
+)
+```
+
+### No challenge (control)
+
+#### Variable selection
+
+```{r variables_control}
+data <- ANSES[which(ANSES$Inoculation == "control"),]
+data <- data %>%
+  mutate(
+    Pig_ID = as.factor(Pig_ID),
+    Sex = as.factor(Sex), 
+    Batch = as.factor(Batch), 
+    Housing = as.factor(Housing), 
+    Inoculation = as.factor(Inoculation), 
+    Pen_ID  = as.factor(Pen_ID)
+  )
+```
+
+#### Graphs
+
+#### Extract residuals
+
+```{r model_residuals_control}
+residuals_dataset <- data.frame(Pig_ID = data$Pig_ID)
+
+for (var in c(behavior_vars, physio_vars)) {
+  #arcsine transformation for proportions of play, raw data for physiology
+  x <- if (var %in% behavior_vars) asin(sqrt(data[[var]])) else data[[var]] 
+  residuals_dataset[[var]] <- residuals(
+    lmer(x ~ Sex + Housing + (1 | Batch), data = data, na.action = na.exclude)
+  )
+}
+```
+
+#### Correlations play-physio
+
+```{r Spearman_control}
+results_df_control <- bind_rows(lapply(behavior_vars, function(b) {
+  lapply(physio_vars, function(p) {
+    
+    test <- cor.test(
+      residuals_dataset[[b]],
+      residuals_dataset[[p]],
+      method = "spearman",
+      exact = FALSE
+    )
+    
+    data.frame(
+      behavior = b,
+      physiology = p,
+      correlation = unname(test$estimate),
+      p_value = test$p.value
+    )
+    
+  }) |> bind_rows()
+})) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+heatmap_df <- results_df_control %>%
+  mutate(
+    sig = p_value < 0.05,
+    physiology = factor(
+      physiology,
+      levels = c(
+        unique(physiology[grepl("Amplitude", physiology)]),
+        unique(physiology[grepl("Baseline", physiology)]),
+        unique(physiology[grepl("ADG", physiology)])
+      )
+    )
+  )
+
+heatmap_control <- ggplot(heatmap_df, aes(y = physiology, x = behavior, fill = correlation)) +
+  geom_tile() +
+  geom_text(
+    aes(label = round(correlation, 2),
+        fontface = ifelse(sig, "bold", "plain"))
+    ) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Control",
+    x = "Play behaviour",
+    y = "Physiological variable",
+    fill = "Spearman r"
+  )  +
+theme(
+  axis.text.x = element_text(size = 12, angle = 90, hjust = 1),
+  axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 14, hjust = 0.5)
+)
+
+heatmap_control
+
+ggsave(
+  "/plots/heatmap_control.png",
+  width = 8,
+  height = 7,
+  dpi = 500
+)
+```
+
+#### Visualisation
+
+```{r visualisation_control}
+# Filter significant results
+sig_control <- results_df_control %>%
+  filter(p_value < 0.05)
+
+#Function for scatter plot
+plot_corr <- function(data, xvar, yvar, r = NA, p = NA) {
+  
+  ggplot(data, aes(x = .data[[xvar]], y = .data[[yvar]])) +
+    geom_point(alpha = 0.6) +
+    geom_smooth(method = "lm", se = TRUE, color = "black") +
+    theme_minimal() +
+    labs(
+      title = paste(xvar, "vs", yvar),
+      subtitle = paste0(
+        "method = ", sig_control$method[i],
+        " | r = ", signif(r, 3),
+        " | p = ", signif(p, 3)
+        )
+      )
+}
+
+plots_control <- list()
+
+for(i in 1:nrow(sig_control)) {
+  
+  x <- sig_control$behavior[i]
+  y <- sig_control$physiology[i]
+  
+  plots_control[[i]] <- plot_corr(
+    residuals_dataset,
+    xvar = x,
+    yvar = y,
+    r = sig_control$correlation[i],
+    p = sig_control$p_value[i]
+  )
+}
+
+for(p in plots_control) {
+  print(p)
+}
+```
+
+#### Correlation within play
+
+```{r Spearman_control_play}
+results_df_control_play <- bind_rows(lapply(behavior_vars, function(b) {
+  lapply(behavior_vars, function(p) {
+    
+    test <- cor.test(
+      residuals_dataset[[b]],
+      residuals_dataset[[p]],
+      method = "spearman",
+      exact = FALSE
+    )
+    
+    data.frame(
+      behavior1 = b,
+      behavior2 = p,
+      correlation = unname(test$estimate),
+      p_value = test$p.value
+    )
+    
+  })}) |> bind_rows()
+) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+heatmap_df <- results_df_control_play %>%
+  mutate(
+    sig = p_value < 0.05
+    )
+
+heatmap_control_play <- ggplot(heatmap_df, aes(y = behavior1, x = behavior2, fill = correlation)) +
+  geom_tile() +
+  geom_text(
+    aes(label = round(correlation, 2),
+        fontface = ifelse(sig, "bold", "plain"))
+    ) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal() +
+  labs(
+        title = "Control",
+    x = "Play behaviour",
+    y = "Play behaviour",
+    fill = "Spearman r"
+  )  +
+theme(
+  axis.text.x = element_text(size = 12, angle = 90, hjust = 1),
+  axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 14, hjust = 0.5)
+)
+
+heatmap_control_play
+
+ggsave(
+  "/plots/heatmap_control_play.png",
+  width = 8,
+  height = 7,
+  dpi = 500
+)
+```
+
+#### Correlation within physio
+
+```{r Spearman_control_physio}
+results_df_control_physio <- bind_rows(lapply(physio_vars, function(b) {
+  lapply(physio_vars, function(p) {
+    
+    test <- cor.test(
+      residuals_dataset[[b]],
+      residuals_dataset[[p]],
+      method = "spearman",
+      exact = FALSE
+    )
+    
+    data.frame(
+      physio1 = b,
+      physio2 = p,
+      correlation = unname(test$estimate),
+      p_value = test$p.value
+    )
+    
+  })}) |> bind_rows()
+) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+heatmap_df <- results_df_control_physio %>%
+  mutate(
+    sig = p_value < 0.05
+    )
+
+heatmap_control_physio <- ggplot(heatmap_df, aes(y = physio1, x = physio2, fill = correlation)) +
+  geom_tile() +
+  geom_text(
+    aes(label = round(correlation, 2),
+        fontface = ifelse(sig, "bold", "plain"))
+    ) +
+  scale_fill_gradient2(
+    low = "blue",
+    mid = "white",
+    high = "red",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  theme_minimal() +
+  labs(
+        title = "Control",
+    x = "Physiology",
+    y = "Physiology",
+    fill = "Spearman r"
+  )  +
+theme(
+  axis.text.x = element_text(size = 12, angle = 90, hjust = 1),
+  axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 14),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 14, hjust = 0.5)
+)
+
+heatmap_control_physio
+
+ggsave(
+  "/plots/heatmap_control_physio.png",
+  width = 16,
+  height = 14,
+  dpi = 500
+)
+```
