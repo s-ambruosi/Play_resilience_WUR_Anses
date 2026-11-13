@@ -42,8 +42,9 @@ For the repeatability assessment of play, the different play types were analysed
 ## Data
 
 ```{r data_rpt_WUR}
-RPT_data_WUR <- read.csv("/data/WUR_behaviour_four_days.csv", sep=";")
+RPT_data_WUR <- read.csv("../data/WUR_behaviour_four_days.csv", sep=";")
 RPT_data_WUR[,c(1:5)] <- lapply(RPT_data_WUR[,c(1:5)],as.factor)
+RPT_data_WUR$LPS_Frus <- factor(RPT_data_WUR$LPS_Frus,levels = c("LPS", "Frus"))
 RPT_data_WUR$Batch_Pen <- interaction(RPT_data_WUR$Batch, RPT_data_WUR$Pen) # variable to test pen repeatability
 
 # Add total play
@@ -132,6 +133,13 @@ LPS_Frus_play <- ggplot(data,
   )
 
 LPS_Frus_play
+
+ggsave(
+  "../plots/Fig1_Play_proportion_before_LPS_Frus.png",
+  width = 12,
+  height = 8,
+  dpi = 500
+)
 ```
 
 ## Intra-LPS repeatability
@@ -288,7 +296,7 @@ lapply(names(rpt_Global_prop), function(var) {
 #### Variable selection
 
 ```{r variables_LPS}
-WUR_LPS <- read.csv("/data/WUR_LPS.csv", sep=";")
+WUR_LPS <- read.csv("../data/WUR_LPS.csv", sep=";")
 
 data <- WUR_LPS
 data <- data %>%
@@ -402,7 +410,7 @@ theme(
 heatmap_LPS
 
 ggsave(
-  "/plots/heatmap_LPS.png",
+  "../plots/Fig3-1_heatmap_LPS.png",
   width = 8,
   height = 7,
   dpi = 500
@@ -514,7 +522,7 @@ theme(
 heatmap_LPS_play
 
 ggsave(
-  "/plots/heatmap_LPS_play.png",
+  "../plots/Supplementary_FigS2-1_heatmap_LPS_play.png",
   width = 8,
   height = 7,
   dpi = 500
@@ -581,7 +589,7 @@ theme(
 heatmap_LPS_physio
 
 ggsave(
-  "/plots/heatmap_LPS_physio.png",
+  "../plots/Supplementary_FigS2-2_heatmap_LPS_physio.png",
   width = 8,
   height = 7,
   dpi = 500
@@ -593,7 +601,7 @@ ggsave(
 #### Variable selection
 
 ```{r variables_Frus}
-WUR_Frus <- read.csv("/data/WUR_Frustration.csv", sep=";")
+WUR_Frus <- read.csv("../data/WUR_Frustration.csv", sep=";")
 
 data <- WUR_Frus
 data <- data %>%
@@ -705,7 +713,7 @@ theme(
 heatmap_Frus
 
 ggsave(
-  "/plots/heatmap_Frus.png",
+  "../plots/Fig3-2_heatmap_Frus.png",
   width = 8,
   height = 7,
   dpi = 500
@@ -815,7 +823,7 @@ theme(
 )
 
 ggsave(
-  "/plots/heatmap_Frus_play.png",
+  "../plots/Supplementary_FigS2-3_heatmap_Frus_play.png",
   width = 8,
   height = 7,
   dpi = 500
@@ -882,7 +890,7 @@ theme(
 heatmap_Frus_physio
 
 ggsave(
-  "/plots/heatmap_Frus_physio.png",
+  "../plots/Supplementary_FigS2-4_heatmap_Frus_physio.png",
   width = 8,
   height = 7,
   dpi = 500
@@ -894,7 +902,7 @@ ggsave(
 ### Play histograms
 
 ```{r graphs_ETEC}
-ANSES <- read.csv("/data/ANSES.csv", sep=";") 
+ANSES <- read.csv("../data/ANSES.csv", sep=";") 
 
 # Define variables
 behavior_vars <- c("p_total_play",	"p_enrichment",	"p_locomotor_individual",	"p_locomotor_social",	"p_play_fight")
@@ -961,6 +969,13 @@ ETEC_play <- ggplot(data,
   )
 
 ETEC_play
+
+ggsave(
+  "../plots/Fig2_Play_proportion_before_ETEC.png",
+  width = 12,
+  height = 8,
+  dpi = 500
+)
 ```
 
 ### ETEC challenge
@@ -1087,7 +1102,7 @@ theme(
 heatmap_ETEC
 
 ggsave(
-  "/plots/heatmap_ETEC.png",
+  "../plots/Fig4-1_heatmap_ETEC.png",
   width = 8,
   height = 7,
   dpi = 500
@@ -1199,7 +1214,7 @@ theme(
 heatmap_ETEC_play
 
 ggsave(
-  "/plots/heatmap_ETEC_play.png",
+  "../plots/Supplementary_FigS2-5_heatmap_ETEC_play.png",
   width = 8,
   height = 7,
   dpi = 500
@@ -1266,7 +1281,7 @@ theme(
 heatmap_ETEC_physio
 
 ggsave(
-  "/plots/heatmap_ETEC_physio.png",
+  "../plots/Supplementary_FigS2-6_heatmap_ETEC_physio.png",
   width = 16,
   height = 14,
   dpi = 500
@@ -1374,7 +1389,7 @@ theme(
 heatmap_control
 
 ggsave(
-  "/plots/heatmap_control.png",
+  "../plots/Fig4-2_heatmap_control.png",
   width = 8,
   height = 7,
   dpi = 500
@@ -1486,7 +1501,7 @@ theme(
 heatmap_control_play
 
 ggsave(
-  "/plots/heatmap_control_play.png",
+  "../plots/Supplementary_FigS2-7_heatmap_control_play.png",
   width = 8,
   height = 7,
   dpi = 500
@@ -1553,7 +1568,7 @@ theme(
 heatmap_control_physio
 
 ggsave(
-  "/plots/heatmap_control_physio.png",
+  "../plots/Supplementary_FigS2-8_heatmap_control_physio.png",
   width = 16,
   height = 14,
   dpi = 500
